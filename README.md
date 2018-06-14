@@ -1,56 +1,180 @@
-# **Finding Lane Lines on the Road** 
-[![Udacity - Self-Driving Car NanoDegree](https://s3.amazonaws.com/udacity-sdc/github/shield-carnd.svg)](http://www.udacity.com/drive)
+# **Writeup: Finding Lane Lines on the Road** 
 
-<img src="examples/laneLines_thirdPass.jpg" width="480" alt="Combined Image" />
-
-Overview
----
-
+## Overview
 When we drive, we use our eyes to decide where to go.  The lines on the road that show us where the lanes are act as our constant reference for where to steer the vehicle.  Naturally, one of the first things we would like to do in developing a self-driving car is to automatically detect lane lines using an algorithm.
 
-In this project you will detect lane lines in images using Python and OpenCV.  OpenCV means "Open-Source Computer Vision", which is a package that has many useful tools for analyzing images.  
+The **goal** of this project is to find lane lines on the road
 
-To complete the project, two files will be submitted: a file containing project code and a file containing a brief write up explaining your solution. We have included template files to be used both for the [code](https://github.com/udacity/CarND-LaneLines-P1/blob/master/P1.ipynb) and the [writeup](https://github.com/udacity/CarND-LaneLines-P1/blob/master/writeup_template.md).The code file is called P1.ipynb and the writeup template is writeup_template.md 
+## Reflection
 
-To meet specifications in the project, take a look at the requirements in the [project rubric](https://review.udacity.com/#!/rubrics/322/view)
+### 1. Pipeline Description 
 
+The pipeline to process an image consists of the following steps. 
 
-Creating a Great Writeup
----
-For this project, a great writeup should provide a detailed response to the "Reflection" section of the [project rubric](https://review.udacity.com/#!/rubrics/322/view). There are three parts to the reflection:
+1. Convert image to HSV color space. 
+	
+        hsv_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2HSV)
+This allows to mask colors in an image, way better than using the RGB color space. Trying to mask colors in RGB space is difficult, as mixing the Red, Green and Blue channel gives in different colors. We are interested only in yellow and white, in a certain range of saturation and brightness. 
 
-1. Describe the pipeline
+2. Masking colors of interest
 
-2. Identify any shortcomings
+        # mask image for white pixels
+        mask_white_pixels = cv2.inRange(hsv_image, np.array([0, 0, 178]),np.array([180, 25, 255]) )
+             
+        # mask image for yellow pixels
+        mask_yellow_pixels = cv2.inRange(hsv_image, np.array([15, 80, 191]),np.array([25, 255, 255]) 
+       
+        # combine masked images
+        masked_image = cv2.bitwise_or(mask_white_pixels,mask_yellow_pixels)
+Two different masks are generated to seperate the colors yellow and white from the original image with two range sets. The three values of each arrays above are Hue, Saturation and Value (brightness), while in OpenCV Hue counts from 0 to 180, Saturation and Value from 0 to 255. The left array and right array specify the lower and upper bounds. Both masks are combined afterwards to a single one. This resulting mask is directly used for the next step. 
 
-3. Suggest possible improvements
+3. Masks the region of interest. 
 
-We encourage using images in your writeup to demonstrate how your pipeline works.  
+        # Mask the region of interest
+        imshape = original_image.shape
+        vertices = np.array([[(0,imshape[0]),(450, 320), (490, 320), (imshape[1],imshape[0])]], dtype=np.int32)
+        masked_image = region_of_interest(masked_image, vertices)
+The mask is shaped like a trapeze. All pixels outside of the mask are blacked out to retain the lane in front of the car.
 
-All that said, please be concise!  We're not looking for you to write a book here: just a brief description.
+4. Blur and Edge detection
 
-You're not required to use markdown for your writeup.  If you use another method please just submit a pdf of your writeup. Here is a link to a [writeup template file](https://github.com/udacity/CarND-LaneLines-P1/blob/master/writeup_template.md). 
+        # edge detection
+        masked_image = gaussian_blur(masked_image,7)
+        edge_image = canny(masked_image, 50, 150)
+The image is blured first to reduce noise in the image. Edges are dected with the algorithm from Canny. 
 
+5. Hough Lines
+ 
+        # Define the Hough transform parameters
+        # Make a blank the same size as our image to draw on
+        rho = 2               # distance resolution in pixels of the Hough grid
+        theta = 1 * np.pi/180 # angular resolution in radians of the Hough grid
+        threshold = 7        # minimum number of votes (intersections in Hough grid cell)
+        min_line_length = 10  # minimum number of pixels making up a line
+        max_line_gap = 19      # maximumgap in pixels between connectable line segments
+    
+        # Get the hough lines
+        hough_lines_image = hough_lines(edge_image, rho, theta, threshold, min_line_length, max_line_gap)
+All the edges found by the Canny edge detector are used as input for the hough_lines algorithm to find lines along the lane markings. 
 
-The Project
----
+6. Draw lines on top of the image
 
-## If you have already installed the [CarND Term1 Starter Kit](https://github.com/udacity/CarND-Term1-Starter-Kit/blob/master/README.md) you should be good to go!   If not, you should install the starter kit to get started on this project. ##
+        # Draw hough lines on top of the orignal image
+        hough_lines_image_color = cv2.cvtColor(hough_lines_image,cv2.COLOR_RGB2BGR)
+        hough_lines_mask = grayscale(hough_lines_image)
+        not_needed, hough_lines_mask = cv2.threshold(hough_lines_mask, 10, 255, cv2.THRESH_BINARY)
+        hough_lines_mask = cv2.bitwise_not(hough_lines_mask)
+        original_image_masked = cv2.bitwise_and(original_image,original_image,mask = hough_lines_mask)
+        original_image_with_hough_lines = cv2.bitwise_or(original_image_masked, hough_lines_image_color)
+The found lines are used first to generate a mask. Those are taken to black out the the original images at the line locations. Finally the red hough lines are drawn on top. I have chosen this way of merging lines with the original images it improves a lot the appearance, as the contrast is larger. 
 
-**Step 1:** Set up the [CarND Term1 Starter Kit](https://classroom.udacity.com/nanodegrees/nd013/parts/fbf77062-5703-404e-b60c-95b78b2f3f9e/modules/83ec35ee-1e02-48a5-bdb7-d244bd47c2dc/lessons/8c82408b-a217-4d09-b81d-1bda4c6380ef/concepts/4f1870e0-3849-43e4-b670-12e6f2d4b7a7) if you haven't already.
+#### Combine Hough Lines to Two Single Lines
+In order to draw a single line on the left and right lanes, I modified the draw_lines() function. I assume one line should be drawn on the left side of the image and another one on the right side. 
 
-**Step 2:** Open the code in a Jupyter Notebook
+    line_length_left = np.array([])
+    line_length_right = np.array([])
+    xMid = img.shape[1] / 2
+    max_extend = 330
 
-You will complete the project code in a Jupyter notebook.  If you are unfamiliar with Jupyter Notebooks, check out <A HREF="https://www.packtpub.com/books/content/basics-jupyter-notebook-and-python" target="_blank">Cyrille Rossant's Basics of Jupyter Notebook and Python</A> to get started.
+At the next step, I try to find a line length threshold for each side. As the longes lines are probably the ones that define lane markings best. All line length are calculated and inserted into an array. 
+    
+    # calculate the treshold for a minimum length
+    for line in lines:
+        for x1,y1,x2,y2 in line:
+            dy = y2-y1
+            dx = x2-x1
 
-Jupyter is an Ipython notebook where you can run blocks of code and see results interactively.  All the code for this project is contained in a Jupyter notebook. To start Jupyter in your browser, use terminal to navigate to your project directory and then run the following command at the terminal prompt (be sure you've activated your Python 3 carnd-term1 environment as described in the [CarND Term1 Starter Kit](https://github.com/udacity/CarND-Term1-Starter-Kit/blob/master/README.md) installation instructions!):
+            # length calculated without square root
+            # as the real length is not needed
+            length = dx**2 + dy**2
+            if (x1 < xMid and x2 < xMid):
+                line_length_left = np.append(line_length_left, [length])
+            elif (x1 > xMid and x2 > xMid):
+                line_length_right = np.append(line_length_right, [length])
+                     
+The line lengths will be sorted in descending order. The seventh length is the one with minimum threshold. An initial threshold is also give to get rid of noise.
+         
+    line_length_left[::-1].sort()
+    line_length_right[::-1].sort()
+    min_line_length_left = 300
+    min_line_length_right = 300
+    max_element_idx = 6
+    
+    # get the length of the 7th longest line
+    # as minmum length threshold
+    if (len(line_length_left) > max_element_idx):
+        length = line_length_left[max_element_idx]
+        if (length > min_line_length_left):
+            min_line_length_left = length 
 
-`> jupyter notebook`
+    if (len(line_length_right) > max_element_idx):
+        length = line_length_right[max_element_idx]
+        if (length > min_line_length_right):
+            min_line_length_right = length
 
-A browser window will appear showing the contents of the current directory.  Click on the file called "P1.ipynb".  Another browser window will appear displaying the notebook.  Follow the instructions in the notebook to complete the project.  
+The code belows how the lines are filtered by minimum threshold and slope. 
 
-**Step 3:** Complete the project and submit both the Ipython notebook and the project writeup
+    linesLeftX = np.array([])
+    linesLeftY = np.array([])
+    linesRightX = np.array([])
+    linesRightY = np.array([])
+        
+    # group lines to left or right lines
+    for line in lines:
+        for x1,y1,x2,y2 in line:
+            dy = y2-y1
+            dx = x2-x1
+            
+            # length calculated witout square root
+            # as the real length is not needed
+            length = dx**2 + dy**2
 
-## How to write a README
-A well written README file can enhance your project and portfolio.  Develop your abilities to create professional README files by completing [this free course](https://www.udacity.com/course/writing-readmes--ud777).
+            # filter by minimum line length
+            if (dy < 0 and x1 < xMid and x2 < xMid and length >= min_line_length_left):
+                # left side
+                angle = dx / np.sqrt(length)
+                
+                if (angle > 0.7 and angle < 0.9):
+                    linesLeftX = np.append(linesLeftX, [x1,x2])
+                    linesLeftY = np.append(linesLeftY, [y1,y2])
+                    
+            elif (x1 > xMid and x2 > xMid and length >= min_line_length_right):
+                # right side
+                angle = dx / np.sqrt(length)
+
+                if (angle > 0.7 and angle < 0.9):
+                    linesRightX = np.append(linesRightX, [x1,x2])
+                    linesRightY = np.append(linesRightY, [y1,y2])
+
+The remaining points of the lines are used for curve fitting. 
+                        
+    if (len(linesLeftX) > 1):
+        z = np.polyfit(linesLeftY, linesLeftX, 1)
+        p = np.poly1d(z)
+        cv2.line(img, (int(p(img.shape[0])), img.shape[0]), (int(p(max_extend)), max_extend), color, thickness)
+            
+    if (len(linesRightX) > 1):
+        z = np.polyfit(linesRightY, linesRightX, 1)
+        p = np.poly1d(z)
+        cv2.line(img, (int(p(img.shape[0])), img.shape[0]), (int(p(max_extend)), max_extend), color, thickness)
+
+The two liniar functions are drawn then into the image.
+
+### 2. Identify potential shortcomings with your current pipeline
+
+Left turns, right turns, changing lanes, different kinds of lane markings are not handled with the pipeline. Only a straight lines without to much of curvature are assumed to be lane divider. 
+
+The pipeline is not able to interpolate or correct lane lines based on anothers. 
+
+### 3. Suggest possible improvements to your pipeline
+
+Change the perspective, so that straight lanes a parallel to each other. Use vertical line (Haar) features for line detection. Use an integral image to speed up the processes.
+
+Measure confidence and update lane dividers accordingly. A line doesn't go criss cross from one image to another. 
+
+Keep track of lanes. That may help to estimate lane dividers.
+
+Use a lane marking with high confidence to interpolate the other with low confidence.
+
+Use a polynomial line along lane dividers
 
